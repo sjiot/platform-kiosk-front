@@ -9,8 +9,6 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - awj
-      - front_kiosk
       - main
     tags:
       - 'v*'
