@@ -442,6 +442,20 @@ class _AppRootState extends State<AppRoot> {
     _quizAnswers = List<String?>.filled(4, null);
   }
 
+  // 답 선택 후 화면 전환 직후 들어오는 중복 터치(같은 자리 연타·지연된 터치)를 막는 쿨다운.
+  // 전환 애니메이션(700ms)보다 조금 짧게 잡아, 정상적인 빠른 선택은 막지 않습니다.
+  static const Duration _selectCooldown = Duration(milliseconds: 600);
+  DateTime? _lastSelectedAt;
+
+  bool _isSelectCoolingDown() {
+    final last = _lastSelectedAt;
+    return last != null && DateTime.now().difference(last) < _selectCooldown;
+  }
+
+  void _markSelected() {
+    _lastSelectedAt = DateTime.now();
+  }
+
   void _resetManual() {
     _manualIndex = 0;
     _manualAnswers = List<String?>.filled(4, null);
@@ -1000,16 +1014,24 @@ class _AppRootState extends State<AppRoot> {
   // 실제로는 품절이 아닌데도 계속 막히는 문제가 있었습니다. 이제 항상
   // 최신 재고를 먼저 조회한 뒤에 품절 여부를 검사합니다.
   Future<void> _selectQuizOption(int digit) async {
+    // 방금 답을 받아 화면이 넘어간 직후의 중복 터치는 무시
+    if (_isSelectCoolingDown()) return;
+
     final options = _mbtiQuestions[_quizIndex]['options'] as List;
     final letter = options[digit - 1]['letter'] as String;
+    final step = _quizIndex;
 
     final success = await _loadSoldOutStock(scope: 'keycap');
 
     if (!mounted || !success) return;
 
+    // 재고 조회 중에 단계가 바뀌었거나 쿨다운 중이면 무시
+    if (_quizIndex != step || _isSelectCoolingDown()) return;
+
     // 선택한 E/I/N/S/F/T/J/P의 모든 색상이 품절이면 입력 무시
     if (_isLetterSoldOut(letter)) return;
 
+    _markSelected();
     if (_quizIndex < _mbtiQuestions.length - 1) {
       setState(() {
         _quizAnswers[_quizIndex] = letter;
@@ -1032,19 +1054,28 @@ class _AppRootState extends State<AppRoot> {
 
   // (터치/키보드 공용) 직접입력 화면에서 알파벳 하나 선택
   Future<void> _selectManualLetter(String letter) async {
+    // 방금 답을 받아 화면이 넘어간 직후의 중복 터치는 무시
+    if (_isSelectCoolingDown()) return;
+
     final pair = _manualPairs[_manualIndex];
 
     // 현재 단계의 글자가 아니면 무시
     if (letter != pair[0] && letter != pair[1]) return;
+
+    final step = _manualIndex;
 
     // 화면 전환 직전에 최신 재고 확인
     final success = await _loadSoldOutStock(scope: 'keycap');
 
     if (!mounted || !success) return;
 
+    // 재고 조회 중에 단계가 바뀌었거나 쿨다운 중이면 무시
+    if (_manualIndex != step || _isSelectCoolingDown()) return;
+
     // 최신 재고 기준으로 다시 품절 확인
     if (_isLetterSoldOut(letter)) return;
 
+    _markSelected();
     setState(() {
       _manualAnswers[_manualIndex] = letter;
 
