@@ -42,6 +42,11 @@ class HomeScreen extends StatefulWidget {
   // 처리해줘야 해서 더 무거운 상태이긴 하나, 화면에 문구가 계속 바뀌는 것보다
   // 하나로 고정해서 보여주는 쪽이 손님 입장에서 덜 헷갈리기 때문입니다).
   final bool paperOut;
+  // [신규] 주문 접수가 마감된 상태인지(GET /queue/status 의 open 이 false).
+  // true면 대기열이 가득 찼을 때와 같은 모양으로 "로봇 충전 중" 안내를
+  // 띄웁니다. 마감 중에는 대기열·용지 상태와 상관없이 주문을 받을 수 없으므로
+  // 세 안내 중 가장 먼저 보여줍니다.
+  final bool lineClosed;
 
   const HomeScreen({
     super.key,
@@ -49,6 +54,7 @@ class HomeScreen extends StatefulWidget {
     this.enabled = true,
     this.queueFull = false,
     this.paperOut = false,
+    this.lineClosed = false,
   });
 
   @override
@@ -216,7 +222,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // [신규] 영수증 용지가 떨어진 경우도 같은 방식으로 안내합니다. 두 상태가
     // 동시에 true면 대기열 안내를 우선 보여줍니다.
     final Widget enterArea;
-    if (widget.queueFull) {
+    if (widget.lineClosed) {
+      enterArea = _blockedNotice(
+        title: '지금은 준비 중이에요',
+        body: '로봇이 충전을 마치면 다시 시작됩니다!',
+      );
+    } else if (widget.queueFull) {
       enterArea = _blockedNotice(
         title: '지금은 대기열이 가득 찼습니다',
         body: '앞 손님 제작이 끝나면 자동으로 다시 시작할 수 있습니다',

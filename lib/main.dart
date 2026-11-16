@@ -33,6 +33,7 @@ import 'screens/keycap_fill_screen.dart';
 import 'screens/complete_screen.dart';
 import 'screens/design_confirm_screen.dart';
 import 'screens/receipt_screen.dart';
+import 'screens/line_closed_screen.dart';
 
 // [디버그/키오스크용] 개발 중(flutter run)에는 전체화면+최상단 고정이
 // VS Code/터미널을 가려서 오히려 불편하므로 기본은 꺼둡니다.
@@ -106,6 +107,7 @@ enum AppStep {
   complete, // [보류] 로봇 조립 애니메이션 — 현재 플로우에서는 사용하지 않음(팀 논의 후 결정). 코드는 보존.
   designConfirm, // [신규] STEP 06 — 완성된 디자인 확인 화면 (Enter=접수 / Esc=초기화 후 STEP01)
   receipt, // [신규] 영수증 화면 (표시 전용, STEP 번호 없음, 8초 후 자동 복귀)
+  lineClosed, // [신규] 주문 도중 접수 마감 안내 (표시 전용, 20초 후 자동 복귀)
 }
 
 class ClickyKeyringApp extends StatelessWidget {
@@ -351,6 +353,11 @@ class _AppRootState extends State<AppRoot> {
   //   true  — 가득 참. 시작하기를 막고 안내 문구를 띄웁니다.
   //   false — 여유 있음. 평소대로 동작.
   bool? _queueFull;
+  // [신규] 서버 응답의 open 값(주문 접수 중인지). 같은 폴링에서 같이 읽습니다.
+  //   null  — 아직 한 번도 못 받음(또는 조회 실패). 판단 보류 = 시작 허용.
+  //   true  — 접수 중. 평소대로 동작.
+  //   false — 접수 마감. 시작하기를 막고 "로봇 충전 중" 안내를 띄웁니다.
+  bool? _lineOpen;
 
   // ---------------- 영수증 용지 상태 ----------------
   // [신규] 대기열 현황과 똑같은 방식으로, 시작 화면에 머무는 동안 영수증
@@ -407,6 +414,8 @@ class _AppRootState extends State<AppRoot> {
   // 완성(done) 후 자동으로 처음 화면으로 돌아가기까지의 대기 시간
   static const Duration _autoRestartAfterDone = Duration(seconds: 8);
   Timer? _doneRestartTimer;
+  // [신규] 주문 도중 접수 마감 안내 화면을 보여주는 시간.
+  static const Duration _lineClosedNoticeDuration = Duration(seconds: 20);
 
   // 색상 코드 <-> 실제 색상. keycap_fill_screen.dart의 범례(KeycapColors)와
   // 동일한 팔레트를 써야 보드판/완성 화면에 칠해지는 색이 범례와 일치합니다.
@@ -480,12 +489,17 @@ class _AppRootState extends State<AppRoot> {
 
       _queuePollInFlight = true;
       try {
-        final full = await _api.isQueueFull();
+        final flags = await _api.getQueueFlags();
         if (!mounted) return;
         // null은 "조회 실패 = 판단 보류"라는 뜻이므로 직전 값을 그대로 둡니다.
         // 네트워크가 잠깐 끊겼다고 시작하기를 막아버리면 안 되기 때문입니다.
-        if (full != null && full != _queueFull) {
-          setState(() => _queueFull = full);
+        final full = flags.full ?? _queueFull;
+        final open = flags.open ?? _lineOpen;
+        if (full != _queueFull || open != _lineOpen) {
+          setState(() {
+            _queueFull = full;
+            _lineOpen = open;
+          });
         }
       } finally {
         _queuePollInFlight = false;
@@ -928,6 +942,7 @@ class _AppRootState extends State<AppRoot> {
         // 무시합니다.
         if (isEnter &&
             !_stockLoading &&
+            _lineOpen != false &&
             _queueFull != true &&
             _printerPaperOut != true) {
           _startOrder();
@@ -982,6 +997,9 @@ class _AppRootState extends State<AppRoot> {
 
       case AppStep.receipt:
         break; // 영수증 화면은 표시 전용 — 키 입력 무시
+
+      case AppStep.lineClosed:
+        break; // 접수 마감 안내도 표시 전용 — 키 입력 무시
 
       case AppStep.complete:
         break; // [보류] 현재 플로우에서 쓰지 않음
@@ -1554,14 +1572,33 @@ class _AppRootState extends State<AppRoot> {
         // (서버가 안내 문구를 바꿔도 프론트 분기가 따라 깨지지 않습니다.)
         // 조회 자체가 실패해서 null이 오면 판단할 근거가 없으므로, 그때만
         // 예전처럼 에러 문구로 폴백합니다.
+        // [신규] 접수 마감(영업 상태 closed)으로 거절당했는지도 같은 조회의
+        // open 값으로 판단합니다. 조회가 실패해 null이면 에러 문구로 폴백합니다.
+        // 마감이면 대기열 상태와 상관없이 주문을 받을 수 없으므로 먼저 봅니다.
         bool isQueueFull = false;
+        bool isLineClosed = false;
         if (!isStockIssue) {
-          final full = await _api.isQueueFull();
+          final flags = await _api.getQueueFlags();
           if (!mounted) return;
-          isQueueFull = full ?? message.contains('대기열이 가득');
+          isLineClosed = flags.open != null
+              ? flags.open == false
+              : message.contains('마감');
+          isQueueFull = flags.full ?? message.contains('대기열이 가득');
         }
 
-        if (isQueueFull) {
+        if (isLineClosed) {
+          // 주문은 만들어지지 않았습니다. 전용 안내를 20초 보여주고 첫 화면으로
+          // 돌아갑니다. 돌아간 첫 화면이 곧바로 마감 안내를 띄우도록 _lineOpen
+          // 도 같이 내려둡니다(다음 폴링을 기다리는 1초 동안 시작하기가 눌리지
+          // 않게).
+          setState(() {
+            _submittingOrder = false;
+            _lineOpen = false;
+            _direction = 1;
+            _step = AppStep.lineClosed;
+          });
+          _scheduleDoneRestart(_lineClosedNoticeDuration);
+        } else if (isQueueFull) {
           setState(() {
             _submittingOrder = false;
             _receiptOrderNumber = null;
@@ -1737,9 +1774,9 @@ class _AppRootState extends State<AppRoot> {
   }
 
   // 완성 상태가 되면 일정 시간 뒤 자동으로 처음 화면으로 복귀
-  void _scheduleDoneRestart() {
+  void _scheduleDoneRestart([Duration after = _autoRestartAfterDone]) {
     _doneRestartTimer?.cancel();
-    _doneRestartTimer = Timer(_autoRestartAfterDone, () {
+    _doneRestartTimer = Timer(after, () {
       if (mounted) _restart();
     });
   }
@@ -1869,8 +1906,11 @@ class _AppRootState extends State<AppRoot> {
           // [수정] 재고 조회 중이거나 대기열이 가득 찼거나 영수증 용지가
           // 없는 동안에는 탭도 막습니다.
           enabled: !_stockLoading &&
+              _lineOpen != false &&
               _queueFull != true &&
               _printerPaperOut != true,
+          // [신규] 접수 마감이면 대기열 가득 참과 같은 모양으로 안내합니다.
+          lineClosed: _lineOpen == false,
           queueFull: _queueFull == true,
           // [수정] home_screen.dart에 paperOut을 추가해서, 이제는 대기열
           // 가득 참과 똑같은 방식으로 화면 안에서 직접 안내합니다. (기존에는
@@ -2006,12 +2046,19 @@ class _AppRootState extends State<AppRoot> {
           qrBytes: _receiptQrBytes,
         );
         break;
+
+      case AppStep.lineClosed:
+        screen = LineClosedScreen(
+          seconds: _lineClosedNoticeDuration.inSeconds,
+        );
+        break;
     }
 
     final showBackButton = _step != AppStep.home &&
         _step != AppStep.complete &&
         _step != AppStep.designConfirm &&
-        _step != AppStep.receipt;
+        _step != AppStep.receipt &&
+        _step != AppStep.lineClosed;
 
     // [디자인] 시안 상단 진행바 표시 여부. 화면 전환 로직과는 무관한
     // 순수 표시용 값입니다.
@@ -2509,6 +2556,7 @@ int _progressStepOf(AppStep step) {
   switch (step) {
     case AppStep.home:
     case AppStep.receipt:
+    case AppStep.lineClosed:
       return 0;
     case AppStep.mbtiChoice:
       return 1;

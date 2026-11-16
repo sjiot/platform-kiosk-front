@@ -191,6 +191,7 @@ class ApiService {
   /// 응답 예시:
   ///   {
   ///     "full": false,          // 대기열이 가득 찼는지 — 이 값만 보면 됨
+  ///     "open": true,           // 주문 접수 중인지. false면 마감(POST /order 가 503)
   ///     "max_queue_len": 3,     // 대기열 최대 길이
   ///     "queue_length": 2,      // 현재 대기 중인 주문 수
   ///     "orders": [             // 대기 중인 주문 목록
@@ -226,6 +227,26 @@ class ApiService {
     // 이제는 공용 헬퍼가 statusCode를 먼저 확인하고, JSON이 아니어도
     // 깔끔한 Exception으로 바꿔줍니다.
     return _decodeOkJson(res, '대기열 조회 실패');
+  }
+
+  /// [신규] 시작 화면 폴링용. 한 번의 GET /queue/status 로 full(대기열 가득)과
+  /// open(주문 접수 중)을 같이 읽습니다.
+  ///
+  /// 각 값은 true/false/null 이며, null은 "판단 보류"입니다 — 조회 자체가
+  /// 실패했거나 응답에 그 필드가 없거나 bool이 아닌 경우입니다.
+  Future<({bool? full, bool? open})> getQueueFlags() async {
+    try {
+      final body = await getQueueStatus();
+      final full = body['full'];
+      final open = body['open'];
+      return (
+        full: full is bool ? full : null,
+        open: open is bool ? open : null,
+      );
+    } catch (e) {
+      debugPrint('>>> [대기열] 조회 실패: $e');
+      return (full: null, open: null);
+    }
   }
 
   /// [신규] "대기열이 가득 찼는가"만 알면 되는 곳에서 쓰는 헬퍼.
