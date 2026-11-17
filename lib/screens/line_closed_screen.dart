@@ -48,23 +48,12 @@ class _LineClosedScreenState extends State<LineClosedScreen> {
           '주문 도중 접수가 마감되었습니다',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 34,
-            fontWeight: FontWeight.w600,
-            color: AppColors.ink,
-          ),
-        ),
-        const SizedBox(height: 60),
-        const Text(
-          '관리자를 찾아오시면\n스페셜 키캡을 제공해드립니다',
-          textAlign: TextAlign.center,
-          style: TextStyle(
             fontSize: 40,
             fontWeight: FontWeight.w800,
-            height: 1.4,
             color: AppColors.ink,
           ),
         ),
-        const SizedBox(height: 52),
+        const SizedBox(height: 40),
         Text(
           '$_remaining초 뒤 처음 화면으로 돌아갑니다',
           style: AppTextStyles.body.copyWith(fontSize: 28),
